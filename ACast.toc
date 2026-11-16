@@ -1,0 +1,12 @@
+## Interface: 16001
+## Title: ACast
+## Notes: Cast bars for you and your target
+## Version: 0.1.0
+## Category: Combat
+## IconTexture: Interface\Icons\Spell_Nature_Lightning
+## Dependencies: ACore
+## SavedVariables: ACastDB
+
+Core.lua
+Bars.lua
+Options.lua
