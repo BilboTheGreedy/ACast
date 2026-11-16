@@ -11,7 +11,7 @@ local defaults = {
 	target = { show = true, width = 220, height = 18, default = { "CENTER", "CENTER", 0, -120 } },
 }
 
-ACore.New(ADDON, ns, { db = "ACastDB", defaults = defaults })
+ACore.New(ADDON, ns, { db = "ACastDB", defaults = defaults, profile = true })
 
 ACore.Register({
 	name = "ACast",
