@@ -11,7 +11,14 @@ local COLORS = {
 	done = { 0.35, 0.86, 0.35 },
 	idle = { 0.3, 0.32, 0.38 },
 }
-local LABELS = { player = "Player cast bar", target = "Target cast bar" }
+local LABELS = { player = "Player cast bar", target = "Target cast bar", focus = "Focus cast bar", pet = "Pet cast bar" }
+local DEFAULT = {
+	player = { "PlayerCastingBarFrame", "CastingBarFrame" },
+	target = { "TargetFrameSpellBar" },
+	focus = { "FocusFrameSpellBar" },
+	pet = { "PetCastingBarFrame" },
+}
+ns.LABELS = LABELS
 
 local bars = {}
 local byUnit = {}
@@ -36,18 +43,29 @@ local function duration(fn, unit)
 	return nil
 end
 
+local function has(v)
+	if IsSecret(v) then return true end
+	return v ~= nil
+end
+
+local function plain(v)
+	if IsSecret(v) then return nil end
+	return v
+end
+
 local function read(unit)
-	local name, text, tex, startMs, endMs, _, castID, shield = UnitCastingInfo(unit)
+	local name, text, tex, startMs, endMs, _, castID, shield, spell = UnitCastingInfo(unit)
 	local info = { channel = false }
-	if name then
+	if has(name) then
 		info.castID = castID
 		info.duration = duration(UnitCastingDuration, unit)
 	else
-		name, text, tex, startMs, endMs, _, shield = UnitChannelInfo(unit)
-		if not name then return nil end
+		name, text, tex, startMs, endMs, _, shield, spell = UnitChannelInfo(unit)
+		if not has(name) then return nil end
 		info.channel = true
 		info.duration = duration(UnitChannelDuration, unit)
 	end
+	info.spell = plain(spell)
 	if IsSecret(name) or IsSecret(text) then
 		info.text = name
 	elseif type(text) == "string" and text ~= "" then
@@ -61,7 +79,7 @@ local function read(unit)
 	else
 		info.shield = shield and true or false
 	end
-	if startMs == nil or endMs == nil or IsSecret(startMs) or IsSecret(endMs) then
+	if IsSecret(startMs) or IsSecret(endMs) or type(startMs) ~= "number" or type(endMs) ~= "number" then
 		info.secret = true
 	else
 		info.start = startMs / 1000
@@ -70,7 +88,58 @@ local function read(unit)
 	return info
 end
 
+local function rank(spell)
+	if not spell then return nil end
+	local fn = (C_Spell and C_Spell.GetSpellSubtext) or GetSpellSubtext
+	if not fn then return nil end
+	local ok, text = pcall(fn, spell)
+	text = ok and plain(text)
+	if type(text) == "string" and text ~= "" then return text end
+	return nil
+end
+
+local function label(b, info)
+	local text = info.text
+	if IsSecret(text) or type(text) ~= "string" then return text end
+	if ns.db.rank then
+		local r = rank(info.spell)
+		if r then text = text .. " (" .. r .. ")" end
+	end
+	if b.key == "player" and ns.db.targetName and b.castTarget then
+		text = text .. " |cffb4b6be> " .. b.castTarget .. "|r"
+	end
+	return text
+end
+
+local function who(guid)
+	guid = plain(guid)
+	if type(guid) ~= "string" or guid == "" then return nil end
+	local name
+	if UnitNameFromGUID then
+		local ok, n = pcall(UnitNameFromGUID, guid)
+		if ok then name = plain(n) end
+	end
+	if not name and GetPlayerInfoByGUID then
+		local ok, _, _, _, _, _, n = pcall(GetPlayerInfoByGUID, guid)
+		if ok then name = plain(n) end
+	end
+	if type(name) == "string" and name ~= "" then return name end
+	return nil
+end
+
+local function interruptText(by)
+	local text = INTERRUPTED or "Interrupted"
+	local name = who(by)
+	if not name then return text end
+	if type(SPELL_INTERRUPTED_BY) == "string" then
+		local ok, out = pcall(string.format, SPELL_INTERRUPTED_BY, name)
+		if ok then return out end
+	end
+	return text .. " (" .. name .. ")"
+end
+
 local function idle(b)
+	b.castTarget = nil
 	b.mode = nil
 	b.fade = nil
 	b.test = nil
@@ -122,6 +191,7 @@ end
 
 local function begin(b, info)
 	local continuing = b.mode and not b.fade and same(b.castID, info.castID)
+	local wasChannel = b.mode == "channel" and not b.fade
 	b.mode = info.channel and "channel" or "cast"
 	b.fade = nil
 	b.test = info.test
@@ -129,11 +199,19 @@ local function begin(b, info)
 	b.secret = info.secret
 	b.poll = 0
 	if not continuing then b.succeeded = nil end
+	if not continuing and not (info.channel and wasChannel) then
+		b.castTarget = nil
+		if b.key == "player" and b.sent and not info.test then
+			local age = GetTime() - b.sent
+			if age >= 0 and age <= 1.5 then b.castTarget = b.sentTarget end
+		end
+	end
 	b:SetAlpha(1)
-	pcall(b.bar.left.SetText, b.bar.left, info.text)
+	pcall(b.bar.left.SetText, b.bar.left, label(b, info))
 	if not pcall(b.icon.SetTexture, b.icon, info.icon) then b.icon:SetTexture(QUESTION) end
 	setColor(b, info.shield and "shield" or b.mode)
 	if info.secret then
+		if b.key == "player" and not continuing then b.sent = nil end
 		b.bar.right:SetText("")
 		b.lag:Hide()
 		local timed = false
@@ -239,7 +317,6 @@ end
 
 local function layout(b)
 	local db = ns.db[b.key]
-	db.scale = ns.db.scale
 	db.locked = ns.db.locked
 	b:SetSize(db.width, db.height)
 	b.icon:SetSize(db.height, db.height)
@@ -249,7 +326,7 @@ local function layout(b)
 end
 
 local function create(key, unit)
-	local name = key == "player" and "ACastPlayerBar" or "ACastTargetBar"
+	local name = "ACast" .. key:sub(1, 1):upper() .. key:sub(2) .. "Bar"
 	local b = CreateFrame("Frame", name, UIParent)
 	b.key = key
 	b.unit = unit
@@ -265,6 +342,9 @@ local function create(key, unit)
 	b.lag = UI.Tex(b.bar, "OVERLAY", { 0.9, 0.15, 0.15, 0.5 })
 	b.lag:Hide()
 	UI.Movable(b, ns.db[key])
+	if ACore.RegisterMover then
+		ACore.RegisterMover(b, ns.db[key], nil, nil, function() return ns.db[key].show end)
+	end
 	b:RegisterForDrag("LeftButton")
 	b:SetScript("OnDragStart", function(self) self:StartDrag() end)
 	b:SetScript("OnDragStop", function(self) self:StopDrag() end)
@@ -276,21 +356,39 @@ local function create(key, unit)
 	return b
 end
 
+local function editing()
+	local m = EditModeManagerFrame
+	if type(m) ~= "table" or not m.IsEditModeActive then return false end
+	local ok, on = pcall(m.IsEditModeActive, m)
+	return ok and on and true or false
+end
+
+local function locked()
+	return InCombatLockdown and InCombatLockdown() and true or false
+end
+
 local hooked = {}
 local function hideDefault()
 	if not ns.db.hideBlizzard then return end
-	local names = { "PlayerCastingBarFrame", "CastingBarFrame" }
-	if ns.db.target.show then names[#names + 1] = "TargetFrameSpellBar" end
-	for _, name in ipairs(names) do
-		local f = _G[name]
-		if type(f) == "table" and f.UnregisterAllEvents and not hooked[name] then
-			hooked[name] = true
-			pcall(f.UnregisterAllEvents, f)
-			pcall(f.Hide, f)
-			if f.HookScript then
-				pcall(f.HookScript, f, "OnShow", function(self)
-					if ns.db.hideBlizzard then self:Hide() end
-				end)
+	if locked() then
+		ns.hidePending = true
+		return
+	end
+	ns.hidePending = nil
+	for _, key in ipairs(ns.KEYS) do
+		if ns.db[key].show then
+			for _, name in ipairs(DEFAULT[key]) do
+				local f = _G[name]
+				if type(f) == "table" and f.UnregisterAllEvents and not hooked[name] then
+					hooked[name] = true
+					pcall(f.UnregisterAllEvents, f)
+					pcall(f.Hide, f)
+					if f.HookScript then
+						pcall(f.HookScript, f, "OnShow", function(self)
+							if ns.db.hideBlizzard and not editing() and not locked() then self:Hide() end
+						end)
+					end
+				end
 			end
 		end
 	end
@@ -312,9 +410,10 @@ function ns.SetLocked(locked)
 end
 
 function ns.Reset()
-	ns.db.player.pos = nil
-	ns.db.target.pos = nil
-	ns.db.scale = 1
+	for _, key in ipairs(ns.KEYS) do
+		ns.db[key].pos = nil
+		ns.db[key].scale = 1
+	end
 	ns.Apply()
 end
 
@@ -332,7 +431,7 @@ function ns.Test()
 end
 
 local function cast(event)
-	return function(unit, castID)
+	return function(unit, castID, _, by)
 		local b = byUnit[unit]
 		if not b or b.test then return end
 		if event == "refresh" then
@@ -345,7 +444,13 @@ local function cast(event)
 				finish(b, b.succeeded and "done" or "cast", nil, 0.3)
 			end
 		elseif event == "channelstop" then
-			if b.mode == "channel" then finish(b, "channel", nil, 0.2) end
+			if b.mode == "channel" then
+				if who(by) then
+					finish(b, "fail", interruptText(by), 0.9)
+				else
+					finish(b, "channel", nil, 0.2)
+				end
+			end
 		elseif event == "succeeded" then
 			if b.mode == "cast" and (b.secret or same(b.castID, castID)) then b.succeeded = true end
 		elseif event == "failed" then
@@ -355,7 +460,7 @@ local function cast(event)
 		elseif event == "interrupted" then
 			local known = same(b.castID, castID) or b.secret or IsSecret(castID) or castID == nil
 			if (b.mode or b.fade) and known then
-				finish(b, "fail", INTERRUPTED or "Interrupted", 0.9)
+				finish(b, "fail", interruptText(by), 0.9)
 			end
 		end
 	end
@@ -363,8 +468,14 @@ end
 
 ns:Listen("LOGIN", function()
 	ns.unlocked = not ns.db.locked
-	create("player", "player")
-	create("target", "target")
+	local old = rawget(ns.db, "scale")
+	ns.db.scale = nil
+	for _, key in ipairs(ns.KEYS) do
+		local db = ns.db[key]
+		db.default = ns.defaults[key].default
+		if db.scale == nil then db.scale = type(old) == "number" and old or 1 end
+		create(key, key)
+	end
 	ns.Apply()
 
 	local map = {
@@ -382,14 +493,31 @@ ns:Listen("LOGIN", function()
 	}
 	for event, kind in pairs(map) do ns:On(event, cast(kind)) end
 
-	ns:On("UNIT_SPELLCAST_SENT", function(unit)
-		if unit == "player" then bars.player.sent = GetTime() end
+	ns:On("UNIT_SPELLCAST_SENT", function(unit, target)
+		if unit ~= "player" then return end
+		local b = bars.player
+		b.sent = GetTime()
+		target = plain(target)
+		if type(target) ~= "string" or target == "" then target = nil end
+		if target and UnitName and target == plain((UnitName("player"))) then target = nil end
+		b.sentTarget = target
 	end)
-	ns:On("PLAYER_TARGET_CHANGED", function()
-		local b = bars.target
-		if b.test then return end
-		if b.mode or b.fade then idle(b) end
-		refresh(b)
+	local function swap(key)
+		return function()
+			local b = bars[key]
+			if b.test then return end
+			if b.mode or b.fade then idle(b) end
+			refresh(b)
+		end
+	end
+	ns:On("PLAYER_TARGET_CHANGED", swap("target"))
+	ns:On("PLAYER_FOCUS_CHANGED", swap("focus"))
+	local pet = swap("pet")
+	ns:On("UNIT_PET", function(unit)
+		if unit == "player" then pet() end
+	end)
+	ns:On("PLAYER_REGEN_ENABLED", function()
+		if ns.hidePending then hideDefault() end
 	end)
 	ns:On("PLAYER_ENTERING_WORLD", function()
 		hideDefault()

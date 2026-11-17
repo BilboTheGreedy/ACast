@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: ACast
-## Notes: Cast bars for you and your target
+## Notes: Cast bars for you, your target, focus and pet
 ## Version: 0.1.0
 ## Category: Combat
 ## IconTexture: Interface\Icons\Spell_Nature_Lightning

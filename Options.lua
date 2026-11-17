@@ -3,6 +3,13 @@ local UI = ns.UI
 
 local anchor
 
+local SIZES = {
+	player = { { 200, 260, 320, 380 }, { 16, 22, 28 } },
+	target = { { 160, 220, 280 }, { 14, 18, 24 } },
+	focus = { { 160, 200, 260 }, { 12, 16, 22 } },
+	pet = { { 120, 160, 220 }, { 10, 14, 18 } },
+}
+
 local function sizes(title, key, field, values)
 	local entries = { { text = title, title = true } }
 	for _, v in ipairs(values) do
@@ -17,6 +24,45 @@ local function sizes(title, key, field, values)
 	return entries
 end
 
+function ns.Options()
+	local db = ns.db
+	local entries = {
+		{ text = "ACast", title = true },
+		{ text = db.locked and "Unlock to move the bars" or "Lock the bars", func = function() ns.SetLocked(not db.locked) end },
+		{ text = "Show a test cast", func = ns.Test },
+		{ text = "Reset positions", func = ns.Reset },
+		{ text = "Bars", title = true },
+	}
+	for _, key in ipairs(ns.KEYS) do
+		entries[#entries + 1] = UI.Check(db[key], "show", ns.LABELS[key], ns.Apply)
+	end
+	local more = {
+		{ text = "Options", title = true },
+		UI.Check(db, "icon", "Spell icon", ns.Apply),
+		UI.Check(db, "time", "Time text"),
+		UI.Check(db, "targetName", "Name of the cast target on the player bar"),
+		UI.Check(db, "rank", "Spell rank"),
+		UI.Check(db, "latency", "Latency zone on the player bar"),
+		UI.Check(db, "hideBlizzard", "Hide the default cast bars", function(on)
+			if on then ns.Apply() else ns.Print("the default cast bars come back after /reload") end
+		end),
+	}
+	local function add(list)
+		for _, e in ipairs(list) do entries[#entries + 1] = e end
+	end
+	add(more)
+	for _, key in ipairs(ns.KEYS) do
+		local label = ns.LABELS[key]
+		add(sizes(label .. " width", key, "width", SIZES[key][1]))
+		add(sizes(label .. " height", key, "height", SIZES[key][2]))
+	end
+	add(UI.ScaleEntries({ scale = db.player.scale }, function(s)
+		for _, key in ipairs(ns.KEYS) do db[key].scale = s end
+		ns.Apply()
+	end))
+	return entries
+end
+
 function ns.OpenMenu()
 	if not ns.db or not ns.bars.player then return end
 	if not anchor then
@@ -24,31 +70,7 @@ function ns.OpenMenu()
 		anchor:SetSize(1, 1)
 		anchor:SetPoint("CENTER", UIParent, "CENTER", -90, 160)
 	end
-	local db = ns.db
-	local entries = {
-		{ text = "ACast", title = true },
-		{ text = db.locked and "Unlock to move the bars" or "Lock the bars", func = function() ns.SetLocked(not db.locked) end },
-		{ text = "Show a test cast", func = ns.Test },
-		{ text = "Reset positions", func = ns.Reset },
-		{ text = "Options", title = true },
-		UI.Toggle(db.player, "show", "Player cast bar", ns.Apply),
-		UI.Toggle(db.target, "show", "Target cast bar", ns.Apply),
-		UI.Toggle(db, "icon", "Spell icon", ns.Apply),
-		UI.Toggle(db, "time", "Time text"),
-		UI.Toggle(db, "latency", "Latency zone on the player bar"),
-		UI.Toggle(db, "hideBlizzard", "Hide the default cast bar", function(on)
-			if on then ns.Apply() else ns.Print("the default cast bar comes back after /reload") end
-		end),
-	}
-	local function add(list)
-		for _, e in ipairs(list) do entries[#entries + 1] = e end
-	end
-	add(sizes("Player width", "player", "width", { 200, 260, 320, 380 }))
-	add(sizes("Player height", "player", "height", { 16, 22, 28 }))
-	add(sizes("Target width", "target", "width", { 160, 220, 280 }))
-	add(sizes("Target height", "target", "height", { 14, 18, 24 }))
-	add(UI.ScaleEntries(db, ns.Apply))
-	UI.Menu(anchor, entries)
+	UI.Menu(anchor, ns.Options())
 end
 
 SLASH_ACAST1 = "/acast"
